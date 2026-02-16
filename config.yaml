@@ -1,0 +1,91 @@
+# ============================================================
+# CIC-IDS2017 Preprocessing Pipeline — Central Configuration
+# ============================================================
+
+# ---- Paths ----
+paths:
+  raw_data_dir: "data/raw"
+  processed_data_dir: "data/processed"
+  models_dir: "models"
+  reports_dir: "reports"
+  log_file: "reports/pipeline.log"
+
+# ---- Reproducibility ----
+random_seed: 42
+
+# ---- Ingest ----
+ingest:
+  encoding: "utf-8"           # fallback: latin-1
+  fallback_encoding: "latin-1"
+  chunk_size: 500_000          # rows per chunk (set null to disable chunking)
+
+# ---- Cleaning ----
+cleaning:
+  # Columns to drop (non-feature / leakage-prone).
+  # These are matched AFTER column-name normalisation (lowercase, underscored).
+  columns_to_drop:
+    - "flow_id"
+    - "source_ip"       # also matches 'src_ip'
+    - "destination_ip"  # also matches 'dst_ip'
+    - "source_port"     # also matches 'src_port'
+    - "destination_port" # also matches 'dst_port'
+    - "timestamp"
+  replace_inf_with: "nan"      # "nan" → NaN then impute  |  "clip" → clip to col max/min
+  nan_strategy: "median"       # "median" | "mean" | "drop_rows" | "zero"
+  remove_duplicates: true
+  clip_outliers: false          # IQR-based clipping (optional)
+  clip_factor: 3.0             # multiplier for IQR range
+
+# ---- Labels ----
+labels:
+  label_column: "label"        # after normalisation
+  task_mode: "binary"          # "binary" | "multiclass" | "both"
+  # Binary mapping:  BENIGN → 0, everything else → 1
+  # Multiclass mapping is auto-generated from unique labels.
+
+# ---- Train / Val / Test Split ----
+split:
+  strategy: "day_based"        # "random" | "day_based" | "time_based"
+  test_size: 0.20              # used by random & time_based
+  val_size: 0.10               # used by random & time_based
+  # Day-based assignment (keys = substring of source filename, lowercase):
+  day_assignment:
+    train: ["monday", "tuesday", "wednesday"]
+    val: ["thursday"]
+    test: ["friday"]
+
+# ---- Scaling / Transformation ----
+transform:
+  scaler: "robust"             # "robust" | "standard" | "minmax" | "none"
+  save_format: "parquet"       # "parquet" | "feather" | "csv"
+
+# ---- Imbalance Handling ----
+imbalance:
+  enabled: false               # master toggle
+  method: "smote"              # "smote" | "adasyn" | "smote_tomek" | "smote_enn"
+                               # | "random_over" | "random_under"
+  min_class_samples: 6         # skip SMOTE for classes smaller than this (k_neighbors + 1)
+  smote_k_neighbors: 5
+  sampling_strategy: "auto"    # "auto" | "minority" | "not majority" | dict
+
+# ---- Class-Weight (algorithm-level) ----
+class_weights:
+  enabled: true                # pass class_weight="balanced" to sklearn estimators
+  mode: "balanced"             # "balanced" | custom dict
+
+# ---- Feature Selection (optional) ----
+feature_selection:
+  enabled: false
+  variance_threshold: 0.0     # drop zero-variance features
+  correlation_threshold: 0.95  # drop one of each highly-correlated pair
+  mutual_info_top_k: null      # keep top-k by mutual information (null = skip)
+
+# ---- Anomaly-Detection Mode ----
+anomaly_detection:
+  enabled: true                # produce a benign-only training set for Isolation Forest
+  benign_label: 0              # label value that represents normal traffic
+
+# ---- Output ----
+output:
+  save_csv_copy: false         # also save a CSV alongside Parquet
+  summary_to_file: true        # write summary stats to reports/summary.txt

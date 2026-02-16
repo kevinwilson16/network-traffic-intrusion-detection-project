@@ -1,0 +1,35 @@
+# ─── Python ───
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# ─── Virtual environment ───
+.venv/
+
+# ─── Data (too large for GitHub) ───
+data/raw/
+data/processed/
+
+# ─── Model artifacts (large binary files) ───
+models/*.joblib
+models/*.pkl
+models/*.h5
+
+# ─── Reports / generated output ───
+reports/pipeline.log
+reports/summary.txt
+reports/*.png
+
+# ─── IDE / OS ───
+.vscode/
+.idea/
+*.swp
+*.swo
+Thumbs.db
+.DS_Store
+
+# ─── Temp config from CLI overrides ───
+config_patched.yaml
