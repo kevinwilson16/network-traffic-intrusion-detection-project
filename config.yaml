@@ -33,8 +33,8 @@ cleaning:
   replace_inf_with: "nan"      # "nan" → NaN then impute  |  "clip" → clip to col max/min
   nan_strategy: "median"       # "median" | "mean" | "drop_rows" | "zero"
   remove_duplicates: true
-  clip_outliers: false          # IQR-based clipping (optional)
-  clip_factor: 3.0             # multiplier for IQR range
+  clip_outliers: true           # IQR-based clipping (essential for linear models)
+  clip_factor: 5.0             # multiplier for IQR range (conservative clipping)
 
 # ---- Labels ----
 labels:
@@ -50,13 +50,13 @@ split:
   val_size: 0.10               # used by random & time_based
   # Day-based assignment (keys = substring of source filename, lowercase):
   day_assignment:
-    train: ["monday", "tuesday", "wednesday"]
-    val: ["thursday"]
+    train: ["monday", "tuesday", "wednesday", "thursday"]
+    val: []
     test: ["friday"]
 
 # ---- Scaling / Transformation ----
 transform:
-  scaler: "robust"             # "robust" | "standard" | "minmax" | "none"
+  scaler: "standard"           # "robust" | "standard" | "minmax" | "none"
   save_format: "parquet"       # "parquet" | "feather" | "csv"
 
 # ---- Imbalance Handling ----

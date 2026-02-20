@@ -1,11 +1,11 @@
 """
-Train/val/test splitting, NaN imputation, feature scaling, and
+Train/test splitting, NaN imputation, feature scaling, and
 imbalance resampling for CIC-IDS2017.
 
-Merged from the original ``split.py`` and ``transform.py``.
+Protocol:
+1. Train = Monday, Tuesday, Wednesday, Thursday
+2. Test = Friday
 
-Key principle: imputation and scaling are fitted on TRAINING data only,
-then applied to val/test to prevent data leakage.
 """
 
 from __future__ import annotations
@@ -42,29 +42,29 @@ def _random_split(
     val_size: float,
     seed: int,
 ) -> SplitResult:
-    """Stratified random split into train/val/test."""
+    """Stratified random split into train/test (val empty)."""
     y = df[target_col]
     X = df.drop(columns=[target_col])
 
-    # First split: train+val vs test
-    X_tv, X_test, y_tv, y_test = train_test_split(
+    # Only one split: train vs test
+    X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=test_size, stratify=y, random_state=seed,
     )
-    # Second split: train vs val (rescale val_size relative to remaining)
-    relative_val = val_size / (1.0 - test_size)
-    X_train, X_val, y_train, y_val = train_test_split(
-        X_tv, y_tv, test_size=relative_val, stratify=y_tv, random_state=seed,
-    )
+    
+    # Empty validation
+    X_val = pd.DataFrame(columns=X.columns)
+    y_val = pd.Series(dtype=y.dtype)
+
     logger.info(
-        "Random split → train=%d  val=%d  test=%d",
-        len(X_train), len(X_val), len(X_test),
+        "Random split -> train=%d  val=0 (disabled)  test=%d",
+        len(X_train), len(X_test),
     )
     return X_train, X_val, X_test, y_train, y_val, y_test
 
 
 _DEFAULT_DAY_ASSIGNMENT: Dict[str, List[str]] = {
-    "train": ["monday", "tuesday", "wednesday"],
-    "val":   ["thursday"],
+    "train": ["monday", "tuesday", "wednesday", "thursday"],
+    "val":   [],  # Disabled
     "test":  ["friday"],
 }
 
@@ -74,7 +74,7 @@ def _day_based_split(
     target_col: str,
     day_assignment: Optional[Dict[str, List[str]]] = None,
 ) -> SplitResult:
-    """Assign entire days to train/val/test (prevents temporal leakage)."""
+    """Assign entire days to train/test (prevents temporal leakage)."""
     assignment = day_assignment or _DEFAULT_DAY_ASSIGNMENT
 
     if "source_file" not in df.columns:
@@ -84,30 +84,39 @@ def _day_based_split(
 
     def _match(keywords: List[str]) -> pd.Series:
         mask = pd.Series(False, index=df.index)
+        if not keywords:
+            return mask
         for kw in keywords:
             mask |= source.str.contains(kw.lower(), na=False)
         return mask
 
     train_mask = _match(assignment["train"])
-    val_mask = _match(assignment["val"])
     test_mask = _match(assignment["test"])
+    # Val is empty by default/design
 
-    # Rows matching no group → train
-    unmatched = ~(train_mask | val_mask | test_mask)
+    # Rows matching no group -> train (catch-all)
+    unmatched = ~(train_mask | test_mask)
     if unmatched.any():
         logger.warning(
-            "%d rows matched no day keyword — assigned to train.", int(unmatched.sum())
+            "%d rows matched no day keyword - assigned to train.", int(unmatched.sum())
         )
         train_mask |= unmatched
 
     # Drop source_file (not a feature)
     def _split_xy(mask):
+        if not mask.any():
+            return df.iloc[:0].drop(columns=["source_file", target_col], errors="ignore"), \
+                   df.iloc[:0][target_col]
+        
         subset = df[mask].drop(columns=["source_file"], errors="ignore")
         return subset.drop(columns=[target_col]), subset[target_col]
 
     X_train, y_train = _split_xy(train_mask)
-    X_val, y_val = _split_xy(val_mask)
     X_test, y_test = _split_xy(test_mask)
+    
+    # Empty val
+    X_val = pd.DataFrame(columns=X_train.columns)
+    y_val = pd.Series(dtype=y_train.dtype, name=target_col)
 
     for split in (X_train, X_val, X_test):
         split.reset_index(drop=True, inplace=True)
@@ -115,8 +124,8 @@ def _day_based_split(
         split.reset_index(drop=True, inplace=True)
 
     logger.info(
-        "Day-based split → train=%d  val=%d  test=%d",
-        len(X_train), len(X_val), len(X_test),
+        "Day-based split -> train=%d (Mon-Thu)  val=0 (disabled)  test=%d (Fri)",
+        len(X_train), len(X_test),
     )
     return X_train, X_val, X_test, y_train, y_val, y_test
 
@@ -127,11 +136,10 @@ def _time_based_split(
     test_size: float,
     val_size: float,
 ) -> SplitResult:
-    """Chronological split based on row order."""
+    """Chronological split based on row order (Train/Test only)."""
     n = len(df)
     test_n = int(n * test_size)
-    val_n = int(n * val_size)
-    train_n = n - test_n - val_n
+    train_n = n - test_n
 
     if "source_file" in df.columns:
         df = df.drop(columns=["source_file"])
@@ -140,15 +148,17 @@ def _time_based_split(
     y = df[target_col]
 
     X_train, y_train = X.iloc[:train_n], y.iloc[:train_n]
-    X_val, y_val = X.iloc[train_n:train_n + val_n], y.iloc[train_n:train_n + val_n]
-    X_test, y_test = X.iloc[train_n + val_n:], y.iloc[train_n + val_n:]
+    X_test, y_test = X.iloc[train_n:], y.iloc[train_n:]
+    
+    X_val = pd.DataFrame(columns=X.columns)
+    y_val = pd.Series(dtype=y.dtype)
 
     for split in (X_train, X_val, X_test, y_train, y_val, y_test):
         split.reset_index(drop=True, inplace=True)
 
     logger.info(
-        "Time-based split → train=%d  val=%d  test=%d",
-        len(X_train), len(X_val), len(X_test),
+        "Time-based split -> train=%d  val=0  test=%d",
+        len(X_train), len(X_test),
     )
     return X_train, X_val, X_test, y_train, y_val, y_test
 
@@ -188,22 +198,10 @@ def fit_imputer_and_transform(
     strategy: str = "median",
     output_dir: Optional[Union[str, pathlib.Path]] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Fit imputer on train only, transform all splits (no leakage)."""
+    """Fit imputer on train only, transform all splits safely."""
     feature_names = list(X_train.columns)
 
-    nan_train = int(X_train.isna().sum().sum())
-    nan_val   = int(X_val.isna().sum().sum())
-    nan_test  = int(X_test.isna().sum().sum())
-    total_nan = nan_train + nan_val + nan_test
-    logger.info(
-        "NaN counts — train: %d, val: %d, test: %d (total: %d)",
-        nan_train, nan_val, nan_test, total_nan,
-    )
-
-    if total_nan == 0:
-        logger.info("No NaN values — skipping imputation.")
-        return X_train, X_val, X_test
-
+    # Impute only if data exists
     if strategy == "zero":
         imputer = SimpleImputer(strategy="constant", fill_value=0)
     else:
@@ -211,17 +209,18 @@ def fit_imputer_and_transform(
 
     imputer.fit(X_train)
     logger.info("Fitted SimpleImputer(strategy='%s') on training data.", strategy)
+    
+    def _transform(df, name):
+        if df.empty:
+            return df
+        return pd.DataFrame(imputer.transform(df), columns=feature_names)
 
-    X_train = pd.DataFrame(imputer.transform(X_train), columns=feature_names)
-    X_val   = pd.DataFrame(imputer.transform(X_val),   columns=feature_names)
-    X_test  = pd.DataFrame(imputer.transform(X_test),  columns=feature_names)
+    X_train = _transform(X_train, "train")
+    X_val   = _transform(X_val, "val")
+    X_test  = _transform(X_test, "test")
 
-    remaining = (
-        int(X_train.isna().sum().sum())
-        + int(X_val.isna().sum().sum())
-        + int(X_test.isna().sum().sum())
-    )
-    logger.info("NaN remaining after imputation: %d", remaining)
+    remaining = int(X_train.isna().sum().sum()) + int(X_test.isna().sum().sum())
+    logger.info("NaN remaining after imputation (Train+Test): %d", remaining)
 
     if output_dir is not None:
         out = pathlib.Path(output_dir)
@@ -255,7 +254,7 @@ def fit_and_transform(
     feature_names = list(X_train.columns)
 
     if scaler_name == "none":
-        logger.info("Scaler is 'none' — data unchanged.")
+        logger.info("Scaler is 'none' - data unchanged.")
         return X_train, X_val, X_test
 
     cls = _SCALER_MAP.get(scaler_name)
@@ -266,9 +265,14 @@ def fit_and_transform(
     scaler.fit(X_train)
     logger.info("Fitted %s on training data (%d features).", scaler_name, len(feature_names))
 
-    X_train = pd.DataFrame(scaler.transform(X_train), columns=feature_names)
-    X_val   = pd.DataFrame(scaler.transform(X_val),   columns=feature_names)
-    X_test  = pd.DataFrame(scaler.transform(X_test),  columns=feature_names)
+    def _transform(df):
+        if df.empty:
+            return df
+        return pd.DataFrame(scaler.transform(df), columns=feature_names)
+
+    X_train = _transform(X_train)
+    X_val   = _transform(X_val)
+    X_test  = _transform(X_test)
 
     if output_dir is not None:
         out = pathlib.Path(output_dir)

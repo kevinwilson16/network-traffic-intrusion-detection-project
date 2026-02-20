@@ -1,18 +1,18 @@
 """
-Pipeline orchestrator — ties preprocess → split → impute → scale → save
+Pipeline orchestrator - ties preprocess -> split -> impute -> scale -> save
 into a single reproducible run.
 
 Stage order:
   1. Ingest raw CSVs
-  2. Clean (dedup BEFORE drop; inf→NaN only)
+  2. Clean (dedup BEFORE drop; inf->NaN only)
   3. Normalise labels, create targets
-  4. Split (day-based by default)
+  4. Split (Train=Mon-Thu, Test=Fri, Val=Disabled)
   5. Impute NaN (fitted on TRAIN only)
   6. Scale features (fitted on TRAIN only)
   7. Resample (optional, train only)
   8. Class weights
   9. Anomaly-detection set (optional)
-  10. Save artefacts
+  10. Save artefacts (Train/Test only)
 """
 
 from __future__ import annotations
@@ -140,13 +140,20 @@ def main(config_path: Union[str, pathlib.Path] = "config.yaml") -> None:
         if label_col not in cols_to_keep:
             df.drop(columns=[label_col], inplace=True)
 
+    # IMPORTANT: if we are not producing a multiclass label_map in this run,
+    # delete any stale label_map.joblib from older runs to prevent confusion.
+    stale_label_map = out_dir / "label_map.joblib"
+    if label_map is None and stale_label_map.exists():
+        stale_label_map.unlink()
+        logger.warning("Removed stale label_map.joblib (this run did not generate one).")
+
     summary.append(f"Task mode: {task_mode}")
     summary.append(f"Target column: {target_col}")
     if label_map:
         summary.append(f"Label map: {dict(label_map)}")
 
     # ── 4. SPLIT ──
-    logger.info("▶ Stage 4: Split")
+    logger.info("▶ Stage 4: Split (Train=Mon-Thu, Test=Fri)")
     split_cfg = cfg.get("split", {})
 
     extra_target = None
@@ -159,13 +166,15 @@ def main(config_path: Union[str, pathlib.Path] = "config.yaml") -> None:
         target_col=target_col,
         strategy=split_cfg.get("strategy", "day_based"),
         test_size=split_cfg.get("test_size", 0.20),
-        val_size=split_cfg.get("val_size", 0.10),
+        val_size=split_cfg.get("val_size", 0.0), # Forced to 0 effectively by strategy
         seed=seed,
         day_assignment=split_cfg.get("day_assignment"),
     )
+    # X_val and y_val are now empty and will be ignored during save.
+    
     summary.append(
         f"Split ({split_cfg.get('strategy', 'day_based')}): "
-        f"train={len(X_train)}  val={len(X_val)}  test={len(X_test)}"
+        f"train={len(X_train)}  test={len(X_test)}  val=0 (disabled)"
     )
 
     # ── 5. IMPUTE (fitted on train only) ──
@@ -203,7 +212,7 @@ def main(config_path: Union[str, pathlib.Path] = "config.yaml") -> None:
         )
         summary.append(f"Resampling ({imb_cfg.get('method')}): train={len(X_train)}")
     else:
-        logger.info("▶ Stage 7: Resample — SKIPPED (disabled)")
+        logger.info("▶ Stage 7: Resample - SKIPPED (disabled)")
 
     # ── 8. CLASS WEIGHTS ──
     cw_cfg = cfg.get("class_weights", {})
@@ -224,22 +233,21 @@ def main(config_path: Union[str, pathlib.Path] = "config.yaml") -> None:
         summary.append(f"Anomaly-detection set: {len(X_benign)} benign rows")
 
     # ── 10. SAVE ──
-    logger.info("▶ Stage 10: Saving artefacts")
+    logger.info("▶ Stage 10: Saving artefacts (Train & Test only)")
     save_dataframe(X_train, out_dir / "X_train", fmt=save_fmt)
-    save_dataframe(X_val,   out_dir / "X_val",   fmt=save_fmt)
-    save_dataframe(X_test,  out_dir / "X_test",  fmt=save_fmt)
+    save_dataframe(X_test, out_dir / "X_test", fmt=save_fmt)
+    # Skipped X_val
 
     y_train.to_frame().reset_index(drop=True).to_parquet(out_dir / "y_train.parquet", index=False)
-    y_val.to_frame().reset_index(drop=True).to_parquet(out_dir / "y_val.parquet",     index=False)
-    y_test.to_frame().reset_index(drop=True).to_parquet(out_dir / "y_test.parquet",   index=False)
+    y_test.to_frame().reset_index(drop=True).to_parquet(out_dir / "y_test.parquet", index=False)
+    # Skipped y_val
 
     if label_map is not None:
         joblib.dump(dict(label_map), out_dir / "label_map.joblib")
 
     if cfg.get("output", {}).get("save_csv_copy", False):
         save_dataframe(X_train, out_dir / "X_train", fmt="csv")
-        save_dataframe(X_val,   out_dir / "X_val",   fmt="csv")
-        save_dataframe(X_test,  out_dir / "X_test",  fmt="csv")
+        save_dataframe(X_test, out_dir / "X_test", fmt="csv")
 
     # ── SUMMARY ──
     elapsed = time.time() - t0

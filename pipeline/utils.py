@@ -130,9 +130,25 @@ def _read_chunked(
         filepath, encoding=enc_to_use, chunksize=chunk_size, **read_kwargs
     )
     n_chunks = 0
-    for chunk in reader:
-        chunks.append(chunk)
-        n_chunks += 1
+    try:
+        for chunk in reader:
+            chunks.append(chunk)
+            n_chunks += 1
+    except UnicodeDecodeError:
+        # The bad byte appeared mid-file — restart with fallback encoding
+        logger.warning(
+            "Encoding %s failed mid-read for %s — retrying with %s.",
+            enc_to_use, filepath.name, fallback_encoding,
+        )
+        enc_to_use = fallback_encoding
+        chunks = []
+        reader = pd.read_csv(
+            filepath, encoding=enc_to_use, chunksize=chunk_size, **read_kwargs
+        )
+        n_chunks = 0
+        for chunk in reader:
+            chunks.append(chunk)
+            n_chunks += 1
 
     logger.info(
         "Loaded %s (%d chunks, encoding=%s)",

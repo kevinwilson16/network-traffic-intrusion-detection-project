@@ -20,8 +20,11 @@ models/*.h5
 
 # ─── Reports / generated output ───
 reports/pipeline.log
+reports/training.log
 reports/summary.txt
 reports/*.png
+reports/metrics/
+reports/figures/
 
 # ─── IDE / OS ───
 .vscode/
